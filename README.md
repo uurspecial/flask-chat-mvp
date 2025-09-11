@@ -1,4 +1,3 @@
-# flask-chat-mvp
 # Flask Chat MVP
 
 最小可行版本：OpenAI API + 滑桿調整風格（中文）
