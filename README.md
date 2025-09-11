@@ -5,12 +5,8 @@
 ---
 
 ## 🛠 安裝
+.env 自己的  
+pip install -r requirements.txt  
+python app.py  
 
-```bash
-git clone https://github.com/你的帳號/flask-chat-mvp.git
-cd flask-chat-mvp
-python -m venv venv
-source venv/bin/activate   # macOS / Linux
-venv\Scripts\activate      # Windows
-pip install -r requirements.txt
 
