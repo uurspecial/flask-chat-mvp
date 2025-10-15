@@ -1,0 +1,278 @@
+
+"""
+Scenario Response Generator
+---------------------------
+用途：針對「大量不同情境」自動產生多語氣/多形式的回覆（不限定酸），
+      供後續分類器評分或做資料擴增。本程式僅負責生成與存檔。
+
+輸出：
+  - ./outputs/scenario_responses.csv
+  - ./outputs/scenario_responses.xlsx  (若環境有安裝 pandas)
+
+欄位：
+  - scenario_id, scenario, user_utterance, tone, style, response
+"""
+
+import os, csv, re, time, random
+from typing import List, Dict, Any, Tuple
+from pathlib import Path
+
+# ============= 你可以在這裡調參 =============
+# 模型（建議：Qwen2.5-7B-Instruct。顯存較小可用 Qwen2.5-1.5B-Instruct / phi-3-mini-128k-instruct）
+MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+
+# 每個情境要產生幾種回覆
+NUM_RESP_PER_SCENARIO = 5
+
+# 句子最長字數（避免太長）
+MAX_CHARS = 60
+
+# 生成隨機種子（可重現）
+RANDOM_SEED = 7
+
+# 是否在大量生成時小睡一下（避免顯卡/CPU 滿載）
+SLEEP_SEC_BETWEEN_CALLS = 0.02
+# ===========================================
+
+try:
+    import pandas as pd
+except Exception:
+    pd = None
+
+random.seed(RANDOM_SEED)
+
+# =========================
+# 1) 情境庫（可持續擴充）
+# =========================
+SCENARIOS: List[str] = [
+    # 餐飲
+    "去餐廳點了菜但是很難吃",
+    "排隊點餐時前面插隊"
+    "吃到異物需要反映",
+    # 交通
+    "在地鐵上不舒服坐博愛座被老人罵時的反應",
+    "公車快關門時有人硬擠撞到你",
+    "搭機被臨時取消航班",
+   # 校園/工作
+    "組員報告臨時爽約",
+    "同事把你的成果報在自己名下",
+    "主管臨時加到不合理工作量",
+    "請假被質疑必要性",
+    # 生活服務
+    "網購商品延遲超過預期",
+    "醫院掛號現場被插隊",
+    "社區噪音半夜不斷",
+    # 人際互動
+    "朋友借錢拖延不還",
+    "好友總是臨時取消約",
+    "情侶約會經常遲到",
+    "陌生人不斷搭訕讓你不舒服",
+    # 線上互動
+    "群組已讀不回需要推進決策",
+    "討論串有人曲解你的意思",
+    "對方傳來未經同意的照片",
+
+    # 住居
+    "室友總是不倒垃圾",
+    "室友深夜打電動吵到你",
+    "房東臨時要看房且不事先通知",
+    "家裡漏水樓上不處理",
+    # 學業
+    "作業規格被助教退回要重做",
+    "被質疑作業是AI寫的",
+    "要向老師延期繳交",
+    "同學考前瘋狂問重點",
+    # 醫療/健康
+    "掛號遲到想協調看診順序",
+    "保險理賠卡關需要補件",
+    "藥局給錯藥想反映",
+    # 金融/行政
+    "刷卡被重複扣款",
+    "超商轉帳錯帳號要協助",
+    "戶政事務所材料忘帶要改期",
+    # 公共場合
+    "博物館有人大聲喧嘩",
+    "排隊時後面的人一直貼很近",
+    "影廳有人滑手機很亮",
+    # 緊急/突發
+    "手機遺失需要協助掛失",
+    "行李在車上被拿錯",
+    "颱風天臨時停班停課的安排",
+    # 情緒支持
+    "朋友分手需要安慰",
+    "同學比賽失利心情低落",
+    "家人住院需要關懷訊息",
+    # 正向場景
+    "祝同學面試上岸的祝賀",
+    "同事升遷想寫一段恭喜",
+    "朋友搬新家送上暖心話",
+    # 學校與社團
+    "社團活動找不到志工",
+    "活動場地臨時被取消",
+    "學校系統當機無法選課",
+    # 客服向品牌
+    "退票系統跳錯誤代碼",
+    "購物網站折扣碼無法使用",
+    "線上課程無法播放需要處理",
+    # 教學/請益
+    "想請教學長如何準備期末考",
+    "詢問教授是否能推薦閱讀清單",
+    "請同學分享筆記是否方便",
+    # 家庭互動
+    "家人催你相親的回應",
+    "被比較成績時如何回應",
+    "過年長輩問薪水怎麼接",
+    # 生活安排
+    "合租水電費如何催繳",
+    "團購遲遲未到貨如何跟單主說",
+    "想取消健身房合約",
+]
+
+# =========================
+# 2) 語氣/風格（不含酸度，側重多樣）
+# =========================
+TONES = [
+    "中性／普通表述",       # 無攻擊性、平淡敘述、客觀說法
+    "輕微不滿／冷淡評論",   # 語氣輕微不悅、冷淡或略帶距離感
+    "明顯挖苦／挑釁語氣",   # 有明確刺、反諷或輕視語氣
+    "冷酸／高階反諷語氣",   # 含蓄而高段、假理性但實質嘲諷
+    "極端酸／羞辱式攻擊",   # 帶侮辱性或強烈貶低、狠酸語氣
+]
+
+
+
+STYLES = [
+    "溫柔",       # 客觀中性、不多情緒
+    "冷淡",       
+    "挑釁",       
+]
+# =========================
+# 3) Prompt 與模型呼叫
+# =========================
+def build_prompt(scenario: str, tone: str, style: str) -> str:
+    """
+    改良版 prompt：讓模型更貼近真實對話與現場語氣。
+    """
+    return f"""你是一個自然語言對話生成器，請模擬「真實人在該情境下」的回覆方式，
+要讓句子聽起來像人講話，而不是客服或機器人。語氣需真實、自然、符合情境。
+
+請根據以下條件生成 1 段回覆：
+- 【情境】：{scenario}
+- 【語氣風格】：{tone}
+- 【表達形式】：{style}
+- 字數限制：{MAX_CHARS} 字以內
+- 不要寫解釋或描述（例如「這段話表達了...」），只輸出最終回覆句。
+- 不要出現 AI、機器、系統等詞。
+- 回覆要讓人覺得像朋友、同事、或現場的人會說的話。
+"""
+
+
+# === Hugging Face 模型初始化（整支程式只做一次） ===
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_NAME,
+    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    device_map="auto"
+)
+
+def call_model(prompt: str) -> str:
+    """使用 Hugging Face Transformers 生成回覆"""
+    messages = [{"role": "user", "content": prompt}]
+    # 多數 Instruct/Chat 模型支援 chat template；若不支援可改成直接拼接字串
+    if hasattr(tokenizer, "apply_chat_template"):
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    else:
+        text = "User:\n" + prompt + "\nAssistant:\n"
+
+    inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=80,
+        temperature=0.9,
+        top_p=0.9,
+        do_sample=True,
+        pad_token_id=tokenizer.eos_token_id
+    )
+    decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    # 嘗試取最後一段（避免模板殘留）
+    resp = decoded.split("assistant")[-1].split("\n")[-1].strip()
+    # 長度裁切
+    return resp[:MAX_CHARS]
+
+def normalize(txt: str) -> str:
+    return re.sub(r"\s+", "", txt)
+
+def generate() -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    total = len(SCENARIOS)
+    for i, scenario in enumerate(SCENARIOS, start=1):
+        scenario_id = f"S{i:03d}"
+        # 建 tone/style 組合池
+        pool = [(t, s) for t in TONES for s in STYLES]
+        random.shuffle(pool)
+        take = pool[:NUM_RESP_PER_SCENARIO]
+
+        print(f"[{i:>3}/{total}] {scenario} -> 產生 {len(take)} 筆")
+        for tone, style in take:
+            prompt = build_prompt(scenario, tone, style)
+            resp = call_model(prompt).strip()
+            if not resp:
+                continue
+            rows.append({
+                "scenario_id": scenario_id,
+                "scenario": scenario,
+                "user_utterance": "",   # 如需也產生「用戶說法」，可再擴充
+                "tone": tone,
+                "style": style,
+                "response": resp,
+            })
+            if SLEEP_SEC_BETWEEN_CALLS > 0:
+                time.sleep(SLEEP_SEC_BETWEEN_CALLS)
+    return rows
+
+def save_outputs(rows: List[Dict[str, Any]], out_dir: str = "outputs") -> Tuple[str, str]:
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    # 只取出回覆欄位
+    responses = [r["response"] for r in rows if "response" in r]
+
+    # 自動生成不重複檔名
+    def next_available_path(base_name: str, ext: str) -> str:
+        """自動避開覆蓋，生成 like only_responses_2.csv"""
+        full_path = os.path.join(out_dir, f"{base_name}{ext}")
+        if not os.path.exists(full_path):
+            return full_path
+        counter = 1
+        while True:
+            new_path = os.path.join(out_dir, f"{base_name}_{counter}{ext}")
+            if not os.path.exists(new_path):
+                return new_path
+            counter += 1
+
+    csv_path = next_available_path("only_responses", ".csv")
+    txt_path = next_available_path("only_responses", ".txt")
+
+    # 寫入 CSV
+    with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        for resp in responses:
+            writer.writerow([resp])
+
+    # 寫入 TXT
+    with open(txt_path, "w", encoding="utf-8-sig") as f:
+        for resp in responses:
+            f.write(resp.strip() + "\n")
+
+    print(f"✅ 已輸出：\n - {csv_path}\n - {txt_path}")
+    return csv_path, txt_path
+
+
+if __name__ == "__main__":
+    rows = generate()
+    if rows:
+        csv_path, txt_path = save_outputs(rows)
+    else:
+        print("No rows generated.")
