@@ -18,7 +18,6 @@ from typing import List, Dict, Any, Tuple
 from pathlib import Path
 
 # ============= 你可以在這裡調參 =============
-# 模型（建議：Qwen2.5-7B-Instruct。顯存較小可用 Qwen2.5-1.5B-Instruct / phi-3-mini-128k-instruct）
 MODEL_NAME = "MediaTek-Research/Breeze-7B-Instruct-v1_0"
 
 # 每個情境要產生幾種回覆
@@ -79,7 +78,7 @@ SCENARIOS = [
 
 
 # =========================
-# 2) 語氣/風格（不含酸度，側重多樣）
+# 2)準則
 # =========================
 TONES = [
     "中性／普通表述：語氣平穩、沒有情緒起伏，像是在描述事實或隨口回應。語句短、自然、無明顯態。",
