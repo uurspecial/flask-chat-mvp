@@ -1,4 +1,4 @@
-
+#1112以後用的
 # 五級定義（模型可學的語氣描述）
 LEVEL_DEFS = {
     1: "平穩中性、無情緒起伏、短句為主、不含反諷與質疑、不評斷對方。",
@@ -28,4 +28,5 @@ def build_prompt(sentence: str, level: int, max_chars: int = 60) -> str:
 
 原始句子：{sentence}
 目標等級：Level {level}
+
 輸出："""
