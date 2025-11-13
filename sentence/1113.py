@@ -66,25 +66,26 @@ def call_model(tokenizer, model, prompt: str) -> str:
     )
     decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    resp = decoded.splitlines()[-1].strip()
+    resp = decoded.splitlines()[-1].strip() #response
     return resp[:MAX_CHARS]
 
 def generate_rows() -> List[Dict[str, Any]]:
     tok, mdl = _init_model()
-    rows: List[Dict[str, Any]] = []
+    rows: List[Dict[str, Any]] = []#建立空的結果列表
     total = len(SENTENCES)
-    for i, s in enumerate(SENTENCES, start=1):
-        print(f"[{i:>2}/{total}] 改寫：{s}")
+    for i, s in enumerate(SENTENCES, start=1):#遍歷每一句句子
+        print(f"[{i:>2}/{total}] 改寫：{s}")#列印進度，方便觀察生成進度
         for lvl in LEVELS:
-            prompt = build_prompt(s, lvl)
-            resp = call_model(tok, mdl, prompt).strip()
+            prompt = build_prompt(s, lvl)#在prompt2.py
+            resp = call_model(tok, mdl, prompt).strip() #去除前後空白
             if not resp:
                 continue
             rows.append({"sentence": s, "level": lvl, "response": resp})
-            if SLEEP_SEC_BETWEEN_CALLS:
+            if SLEEP_SEC_BETWEEN_CALLS: #每次呼叫模型後停一下，避免 API 被限流或過快(爬蟲)
                 time.sleep(SLEEP_SEC_BETWEEN_CALLS)
     return rows
 
+#將 generate_rows() 生成的列表 rows 整理成 每句一行，五個 Level 改寫在同一列
 def save_csv(rows: List[Dict[str, Any]], out_dir: str = "outputs") -> str:
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     csv_path = os.path.join(out_dir, "change_style.csv")
