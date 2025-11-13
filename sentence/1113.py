@@ -59,9 +59,9 @@ def call_model(tokenizer, model, prompt: str) -> str:
     outputs = model.generate(
         **inputs,
         max_new_tokens=80,
-        temperature=1.5,#可改 越高似乎會越創意
-        top_p=0.9,
-        do_sample=True,
+        temperature=1.5,#可改 越高似乎會越創意 控制隨機性，越高 → 越創意 / 越不確定
+        top_p=0.9,#核心抽樣 (nucleus sampling)，保留累積機率 90% 的 token
+        do_sample=True,#啟用隨機抽樣，否則會選擇機率最高的 token（greedy）
         pad_token_id=tokenizer.eos_token_id
     )
     decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
