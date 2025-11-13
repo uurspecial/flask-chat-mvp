@@ -22,6 +22,7 @@ def build_prompt(scenario: str, level: int, max_chars: int = 60) -> str:
     rules = "\n".join([f"- Level {k}: {v}" for k, v in LEVEL_DEFS.items()])
     return f"""你是一個「語氣模擬生成器」，要模擬人類在不同情境下的回覆語氣。
 請依下列五級準則生成一句自然中文回覆（限制在 {max_chars} 字以內），不可輸出解釋。
+#不是回覆 看prompts2.py
 
 五級準則：
 {rules}
