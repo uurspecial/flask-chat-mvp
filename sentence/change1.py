@@ -3,7 +3,7 @@
 change_style.py
 ---------------------------------
 1) 使用句子庫
-2) 任務是「根據五級語氣準則改寫句子」（保留原意）。
+2) 任務是「根據4級語氣準則改寫句子」（保留原意）。
 3) 產出 outputs/change_style.csv，欄位：原始句子、Level1~Level5 改寫。
 """
 
@@ -21,7 +21,7 @@ SLEEP_SEC_BETWEEN_CALLS = 0.02
 random.seed(RANDOM_SEED)
 
 # -----------------------------
-# 50 句「直述句」句子庫（互不相關）
+# 45 句「直述句」句子庫（互不相關）
 # -----------------------------
 SENTENCES: List[str] = [
     "早安你好",
@@ -59,32 +59,33 @@ def call_model(tokenizer, model, prompt: str) -> str:
     outputs = model.generate(
         **inputs,
         max_new_tokens=80,
-        temperature=0.9,
-        top_p=0.9,
-        do_sample=True,
+        temperature=1.5,#可改 越高似乎會越創意 控制隨機性，越高 → 越創意 / 越不確定
+        top_p=0.9,#核心抽樣 (nucleus sampling)，保留累積機率 90% 的 token
+        do_sample=True,#啟用隨機抽樣，否則會選擇機率最高的 token（greedy）
         pad_token_id=tokenizer.eos_token_id
     )
     decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    # 嘗試擷取最後一句
-    resp = decoded.splitlines()[-1].strip()
+
+    resp = decoded.splitlines()[-1].strip() #response
     return resp[:MAX_CHARS]
 
 def generate_rows() -> List[Dict[str, Any]]:
     tok, mdl = _init_model()
-    rows: List[Dict[str, Any]] = []
+    rows: List[Dict[str, Any]] = []#建立空的結果列表
     total = len(SENTENCES)
-    for i, s in enumerate(SENTENCES, start=1):
-        print(f"[{i:>2}/{total}] 改寫：{s}")
+    for i, s in enumerate(SENTENCES, start=1):#遍歷每一句句子
+        print(f"[{i:>2}/{total}] 改寫：{s}")#列印進度，方便觀察生成進度
         for lvl in LEVELS:
-            prompt = build_prompt(s, lvl)
-            resp = call_model(tok, mdl, prompt).strip()
+            prompt = build_prompt(s, lvl)#在prompt2.py
+            resp = call_model(tok, mdl, prompt).strip() #去除前後空白
             if not resp:
                 continue
             rows.append({"sentence": s, "level": lvl, "response": resp})
-            if SLEEP_SEC_BETWEEN_CALLS:
+            if SLEEP_SEC_BETWEEN_CALLS: #每次呼叫模型後停一下，避免 API 被限流或過快(爬蟲)
                 time.sleep(SLEEP_SEC_BETWEEN_CALLS)
     return rows
 
+#將 generate_rows() 生成的列表 rows 整理成 每句一行，五個 Level 改寫在同一列
 def save_csv(rows: List[Dict[str, Any]], out_dir: str = "outputs") -> str:
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     csv_path = os.path.join(out_dir, "change_style.csv")
