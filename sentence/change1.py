@@ -4,8 +4,12 @@
 ---------------------------------
 1) 讀取句子庫 (SENTENCES)
 2) 呼叫 seprompt.py 取得 Prompt (含 Few-Shot 範例)
-3) 產出 outputs/1vs4sentence.csv
+3) 產出 outputs/1vs4sentence_chain.csv
    格式：原始句子 | Level1 改寫 | Level2 改寫 | Level3 改寫 | Level4 改寫
+
+【改動重點】
+- 原本：每個 level 都用原始句子 s 生成（平行）
+- 現在：Level1 -> Level2 -> Level3 -> Level4（階梯式）
 """
 
 import os, csv, time, random
@@ -15,12 +19,12 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # =========================
-# 1. 引用 Prompt 模組 /Users/proflin/uygy/1vs4sentence/1vs4sentence.py
+# 1. 引用 Prompt 模組
 # =========================
 try:
-    from seprompt3 import build_prompt, LEVELS
+    from seprompt import build_prompt, LEVELS
 except ImportError:
-    print("❌ 錯誤：找不到 reprompt.py！")
+    print("❌ 錯誤：找不到 seprompt.py！")
     exit()
 
 # ============= 參數設定 =============
@@ -53,7 +57,7 @@ SENTENCES: List[str] = [
 # -----------------
 # 模型初始化與呼叫
 # -----------------
-def _init_model(): 
+def _init_model():
     print(f"🔄 正在載入模型：{MODEL_NAME} ...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
     model = AutoModelForCausalLM.from_pretrained(
@@ -66,7 +70,7 @@ def _init_model():
 
 def call_model(tokenizer, model, prompt: str) -> str:
     messages = [{"role": "user", "content": prompt}]
-    
+
     # 套用 Chat Template
     text_input = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = tokenizer([text_input], return_tensors="pt").to(model.device)
@@ -85,7 +89,7 @@ def call_model(tokenizer, model, prompt: str) -> str:
     input_length = inputs.input_ids.shape[1]
     generated_tokens = outputs[0][input_length:]
     resp = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
-    
+
     return resp[:MAX_CHARS]
 
 def generate_rows() -> List[Dict[str, Any]]:
@@ -93,58 +97,56 @@ def generate_rows() -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     total = len(SENTENCES)
 
-    print("🚀 開始批次生成...")
+    print("🚀 開始批次生成（階梯式 1→2→3→4）...")
 
     for i, s in enumerate(SENTENCES, start=1):
         print(f"[{i:>2}/{total}] 正在改寫：{s}")
-        
-        # 針對每個等級生成
+
+        # ⭐ 階梯式：下一層用上一層輸出當輸入
+        current_sentence = s
+
         for lvl in LEVELS:
-            prompt = build_prompt(s, lvl)
+            prompt = build_prompt(current_sentence, lvl, max_chars=MAX_CHARS)
             resp = call_model(tokenizer, model, prompt)
-            
-            # 如果生成失敗，給個預設值
-            if not resp: resp = "(生成失敗)"
-            
-            # 存入暫存列表
+
+            if not resp:
+                resp = "(生成失敗)"
+
             rows.append({
-                "sentence": s, 
-                "level": lvl, 
+                "sentence": s,      # 保留最原始句子
+                "level": lvl,
                 "response": resp
             })
-            
-            # 在終端機印出預覽 (方便你檢查)
+
             print(f"    -> Lv{lvl}: {resp}")
+
+            # ⭐⭐ 關鍵：把這層輸出當下一層輸入
+            current_sentence = resp
 
             if SLEEP_SEC_BETWEEN_CALLS:
                 time.sleep(SLEEP_SEC_BETWEEN_CALLS)
-                
+
     return rows
 
 def save_csv(rows: List[Dict[str, Any]], out_dir: str = "outputs") -> str:
     Path(out_dir).mkdir(parents=True, exist_ok=True)
-    csv_path = os.path.join(out_dir, "1vs4sentence3.csv")
+    csv_path = os.path.join(out_dir, "1vs4sentence_chain.csv")
 
     # --- 資料轉置 (Pivot) ---
-    # 目標格式：原始句子 | Level1 | Level2 | Level3 | Level4
     grouped: Dict[str, Dict[int, str]] = {}
     for r in rows:
         s = r["sentence"]
         grouped.setdefault(s, {})[r["level"]] = r["response"]
 
     print(f"\n💾 正在寫入 CSV：{csv_path}")
-    
+
     with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        
-        # 寫入標題列 (動態生成 Level 1~4)
         header = ["原始句子"] + [f"Level {i} 改寫" for i in LEVELS]
         writer.writerow(header)
-        
-        # 寫入內容
+
         for s in SENTENCES:
             lv_map = grouped.get(s, {})
-            # 依序取出 1~4 的改寫結果，若無則留空
             row = [s] + [lv_map.get(i, "") for i in LEVELS]
             writer.writerow(row)
 
